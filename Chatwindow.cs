@@ -18,98 +18,161 @@ namespace ChatApp
         int listenport = 50000;
         string localIP = null;
         string localUser = null;
-        Socket allSocket;
+
+        string[] chatMemIPs = null;
+        string[] chatUsers = null;
+
+        TcpClient localclient;
 
         public Chatwindow()
         {
             InitializeComponent();
         }
 
-        public Chatwindow(string username, TcpClient tcpListenr, string receiveText, string tempIP)
+        public Chatwindow(string members, TcpClient tcpClient, string receiveMsg, string tempIP)
         {
-            localUser = username;
-            localIP = tempIP;
-            listenport += (username[6] - '0') * 1000 + (username[7] - '0') * 100 + (username[8] - '0') * 10 + (username[9] - '0');
-            StartListening(localIP, listenport);
-
             InitializeComponent();
-        }
+            //可以进行跨线程操作
+            CheckForIllegalCrossThreadCalls = false;
 
-        #region 启用监听
-        public void StartListening(string localIP, int listenport)
-        {
-            //主机IP
-            IPEndPoint serverIp = new IPEndPoint(IPAddress.Parse(localIP), listenport);
-            Socket tcpServer = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
-            tcpServer.Bind(serverIp);
-            tcpServer.Listen(100);
-            AsynRecive(allSocket);
-        }
-        #endregion
+            localUser = receiveMsg.Split('|')[0].Split(',')[0];
+            localIP = receiveMsg.Split('|')[0].Split(',')[1];
 
-        #region 异步连接客户端
+            string[] chatUserInfos = receiveMsg.Split('|');
+            chatMemIPs = new string[chatUserInfos.Length];
+            chatUsers = new string[chatUserInfos.Length];
 
-        public void AsynAccept(Socket tcpServer)
-        {
-            tcpServer.BeginAccept(asyncResult =>
+            string[] uesr_info = new string[2];
+            ListViewItem item = null;
+            for (int i = 0; i < chatUserInfos.Length; i++)
             {
-                Socket tcpClient = tcpServer.EndAccept(asyncResult);
+                chatUsers[i] = chatUserInfos[i].Split(',')[0];
+                chatMemIPs[i] = chatUserInfos[i].Split(',')[1];
 
-                AsynAccept(tcpServer);
-                AsynRecive(tcpClient);
-            }, null);
-        }
-        #endregion
-
-        #region 异步接受客户端消息
-
-        public void AsynRecive(Socket tcpClient)
-        {
-            byte[] data = new byte[1024];
-            try
-            {
-                tcpClient.BeginReceive(data, 0, data.Length, SocketFlags.None,
-                asyncResult =>
-                {
-                    int length = tcpClient.EndReceive(asyncResult);
-                    string recieveMess = Encoding.UTF8.GetString(data, 0, length);
-                    receiveTextBox.SelectionAlignment = HorizontalAlignment.Right;
-                    receiveTextBox.AppendText(recieveMess);
-                    AsynRecive(tcpClient);
-                }, null);
+                uesr_info[0] = chatUsers[i];
+                uesr_info[1] = chatMemIPs[i];
+                item = new ListViewItem(uesr_info);
+                chatList.Items.Add(item);
             }
-            catch (Exception ex)
-            {
-                Console.WriteLine("异常信息：", ex.Message);
-            }
+
+            localclient = tcpClient;
+            TcpReceive(tcpClient);
+
         }
-        #endregion
 
-        #region 异步发送消息
-
-        public void AsynSend(Socket tcpClient, string message)
+        public Chatwindow(string members, TcpClient tcpClient, int userNumber, string tempIP)
         {
-            byte[] data = Encoding.UTF8.GetBytes(message);
-            try
-            {
-                tcpClient.BeginSend(data, 0, data.Length, SocketFlags.None, asyncResult =>
-                {
-                    int length = tcpClient.EndSend(asyncResult);
-                }, null);
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine("异常信息：{0}", ex.Message);
-            }
-        }
+            InitializeComponent();
+            //可以进行跨线程操作
+            CheckForIllegalCrossThreadCalls = false;
 
-        #endregion
+            localUser = members.Split(',')[0];
+            localIP = tempIP.Split(',')[0];
+
+            chatMemIPs = tempIP.Split(','); 
+            chatUsers = members.Split(',');
+
+            string[] uesr_info = new string[2];
+            ListViewItem item = null;
+            for (int i = 0; i <= userNumber; i++)
+            {
+                uesr_info[0] = chatUsers[i];
+                uesr_info[1] = chatMemIPs[i];
+                item = new ListViewItem(uesr_info);
+                chatList.Items.Add(item);
+            }
+
+            localclient = tcpClient;
+            TcpReceive(tcpClient);
+        }
 
         private void sendB_Click(object sender, EventArgs e)
         {
-            string sendMess = sendTextBox.Text;
-            AsynSend(allSocket, sendMess);
+            string sendMsg = sendTextBox.Text;
+            TcpSend(localclient, sendMsg);
             sendTextBox.Text = null;
         }
+
+        //Tcp异步接受消息
+        public void TcpReceive(TcpClient tcpclient)
+        {
+            if (tcpclient == null)
+            {
+                MessageBox.Show("网络连接中断", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+            if (tcpclient.Connected == false)
+            {
+                MessageBox.Show("网络连接中断", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+            try
+            {
+                NetworkStream rcvstream = tcpclient.GetStream();
+                string rcvmsg = null;
+                //读取长度
+                byte[] buffer = new byte[4];
+                rcvstream.BeginRead(buffer, 0, 4, ar =>
+                {
+                    int len = BitConverter.ToInt32(buffer, 0);
+                    if (len == 0)
+                    {
+                        MessageBox.Show("对方已断开连接", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        return;
+                    }
+
+                    //读取正文
+                    buffer = new byte[len];
+                    rcvstream.Read(buffer, 0, len);
+                    rcvmsg = Encoding.UTF8.GetString(buffer);
+
+                    string sendUser = rcvmsg.Split('$')[0];
+                    rcvmsg = rcvmsg.Substring(rcvmsg.IndexOf("$")+1);
+
+                    receiveTextBox.SelectionAlignment = HorizontalAlignment.Right;
+                    receiveTextBox.AppendText(sendUser + " " + DateTime.Now.ToLongTimeString() + " ");
+                    receiveTextBox.AppendText(DateTime.Now.ToLongDateString() + "\n");
+                    receiveTextBox.AppendText(rcvmsg + "\n");
+                    //更新接受信息
+                    TcpReceive(tcpclient);
+                }, null);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(ex.ToString(), "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        //Tcp异步发送消息
+        public void TcpSend(TcpClient tcpclient, string sendMsg)
+        {
+            if (tcpclient == null) return;
+            if (tcpclient.Connected == false) return;
+            try
+            {
+                string remotehost = tcpclient.Client.RemoteEndPoint.ToString();
+                NetworkStream sendstream = tcpclient.GetStream();
+
+                //更新信息
+                receiveTextBox.SelectionAlignment = HorizontalAlignment.Right;
+                receiveTextBox.AppendText(localUser + " " + DateTime.Now.ToLongTimeString() + " ");
+                receiveTextBox.AppendText(DateTime.Now.ToLongDateString() + "\n");
+                receiveTextBox.AppendText(sendMsg + "\n");
+
+                //
+                sendMsg = localUser + "$" + sendMsg; 
+                byte[] data = Encoding.UTF8.GetBytes(sendMsg);
+                byte[] buffer = BitConverter.GetBytes(data.Length);
+                sendstream.Write(buffer, 0, 4);
+                sendstream.Write(data, 0, data.Length);
+            }
+            catch(Exception ex)
+            {
+                MessageBox.Show(ex.ToString(), "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            
+        }
+
     }
+
 }
